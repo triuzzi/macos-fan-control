@@ -1,16 +1,37 @@
 {
-  "name": "@macos-fan-control/client",
+  "name": "macos-fan-control-client",
   "version": "1.0.0",
-  "private": true,
-  "description": "Typed Node binding over the fan_control CLI contract.",
+  "description": "Typed Node client for the fan_control CLI — read and force Apple Silicon fan speed through the SMC.",
   "license": "MIT",
+  "author": "triuzzi",
+  "keywords": [
+    "fan",
+    "fan-control",
+    "smc",
+    "apple-silicon",
+    "macos",
+    "temperature"
+  ],
+  "homepage": "https://github.com/triuzzi/macos-fan-control",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/triuzzi/macos-fan-control.git",
+    "directory": "clients/node"
+  },
+  "bugs": {
+    "url": "https://github.com/triuzzi/macos-fan-control/issues"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "typescript": "^5.8.2"

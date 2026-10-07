@@ -1,5 +1,5 @@
 import { showHUD, showToast, Toast } from "@raycast/api";
-import { setAutomatic } from "@macos-fan-control/client";
+import { setAutomatic } from "macos-fan-control-client";
 
 export default async function Command() {
   try {

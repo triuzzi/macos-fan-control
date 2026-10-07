@@ -1,5 +1,5 @@
 import { showHUD, showToast, Toast } from "@raycast/api";
-import { setMaximum } from "@macos-fan-control/client";
+import { setMaximum } from "macos-fan-control-client";
 
 export default async function Command() {
   try {
