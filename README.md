@@ -5,6 +5,7 @@ Raycast is just one frontend.
 
 ![Apple Silicon](https://img.shields.io/badge/apple%20silicon-required-black)
 ![Raycast](https://img.shields.io/badge/raycast-extension-red)
+![npm](https://img.shields.io/npm/v/macos-fan-control-client)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
 ## Architecture
@@ -12,7 +13,7 @@ Raycast is just one frontend.
 ```
 core/                C. Every SMC key, every fan rule. Speaks CLI + JSON.
   └─ fan_control     also the CLI — no separate binary
-clients/node/        typed binding over the JSON contract. No UI.
+clients/node/        typed binding over the JSON contract. Published to npm. No UI.
 interfaces/
   └─ raycast/        presentation only. Zero SMC knowledge.
 ```
@@ -21,13 +22,15 @@ The layers are decoupled by a documented CLI + JSON contract ([CONTRACT.md](CONT
 not by shared code. A frontend never touches an SMC key, never shells out to `sudo`, and
 never parses human text — it calls the core and renders the result.
 
+`clients/node` is published as [`macos-fan-control-client`](https://www.npmjs.com/package/macos-fan-control-client)
+so any JS/TS frontend can depend on a versioned binding instead of vendoring one.
+
 ## Install
 
 ```bash
 git clone https://github.com/triuzzi/macos-fan-control.git
 cd macos-fan-control
 sudo ./scripts/install.sh
-cd interfaces/raycast && npm install && npm run dev
 ```
 
 `install.sh` builds the core, installs it root-owned in `/usr/local/bin`, and adds one
@@ -43,14 +46,21 @@ and validates the rule with `visudo` first.
 
 Remove with `sudo rm /etc/sudoers.d/macos-fan-control /usr/local/bin/fan_control`.
 
-## Raycast commands
+## Raycast
+
+Install **Mac Fan Control** from the [Raycast Store](https://www.raycast.com/triuzzi/mac-fan-control),
+or run the extension in development mode:
+
+```bash
+cd interfaces/raycast && npm install && npm run dev
+```
 
 | Command | Mode | Action |
 |---|---|---|
 | Fan Status | view | Live RPM, target, mode, CPU/GPU temperature |
 | Set Fan Speed | view | Force every fan to 100/85/70/55/40/25/0% |
-| Fans: Maximum | no-view | Force maximum — assign a hotkey |
-| Fans: Automatic | no-view | Hand back to firmware — assign a hotkey |
+| Set Fans to Maximum | no-view | Force maximum — assign a hotkey |
+| Set Fans to Automatic | no-view | Hand back to firmware — assign a hotkey |
 | Fan Menu Bar | menu-bar | Current speed in the menu bar |
 
 ## CLI
@@ -69,6 +79,20 @@ fan_control keys Tg
 `guard` is the thermal safety net: if any fan is forced and CPU or GPU exceeds the ceiling,
 it hands control back to the firmware. It lives in the core, so every frontend inherits it —
 poll it from whatever timer the frontend already has.
+
+## Node client
+
+```bash
+npm install macos-fan-control-client
+```
+
+```ts
+import { readStatus, setPercent, setAutomatic } from "macos-fan-control-client";
+
+const status = await readStatus(true); // fans + CPU/GPU temperatures
+await setPercent(70);                  // force every fan to 70% of its range
+await setAutomatic();                  // hand back to firmware
+```
 
 ## Adding a frontend
 
