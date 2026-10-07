@@ -8,7 +8,6 @@ import {
   Toast,
   confirmAlert,
   showToast,
-  Keyboard,
 } from "@raycast/api";
 import { useCachedPromise } from "@raycast/utils";
 import {
@@ -19,7 +18,7 @@ import {
   rpm,
   setAutomatic,
   setPercent,
-} from "@macos-fan-control/client";
+} from "macos-fan-control-client";
 
 const PRESETS = [100, 85, 70, 55, 40, 25, 0];
 const CONFIRM_BELOW = 50;
@@ -115,7 +114,7 @@ export default function Command() {
               <Action
                 title="Restore Automatic"
                 icon={Icon.Repeat}
-                shortcut={Keyboard.Shortcut.Common.Refresh}
+                shortcut={{ modifiers: ["cmd", "shift"], key: "r" }}
                 onAction={() => apply(setAutomatic, "Fans on automatic")}
               />
             </ActionPanel>
