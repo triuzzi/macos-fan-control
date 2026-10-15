@@ -24,9 +24,16 @@ export interface Temperatures {
   gpuSensors: number;
 }
 
+export interface Cooling {
+  percent: number;
+  below: number;
+  pid: number;
+}
+
 export interface FanStatus {
   fanCount: number;
   fans: Fan[];
+  cooling?: Cooling;
   temperatures?: Temperatures;
 }
 
@@ -59,6 +66,11 @@ export const setMaximum = () => exec(["max"], true);
 export const setAutomatic = () => exec(["auto"], true);
 export const runGuard = (ceilingCelsius?: number) =>
   exec(ceilingCelsius === undefined ? ["guard"] : ["guard", "--max-temp", String(ceilingCelsius)], true);
+export const coolUntil = (percent = 100, belowCelsius = 50, ceilingCelsius?: number) => {
+  const args = ["cool", String(Math.round(percent)), "--below", String(belowCelsius)];
+  if (ceilingCelsius !== undefined) args.push("--max-temp", String(ceilingCelsius));
+  return exec(args, true);
+};
 
 export const rpm = (value: number) => `${Math.round(value).toLocaleString()} rpm`;
 export const mode = (fans: Fan[]) => (fans.every((fan) => fan.forced) ? "Forced" : fans.some((fan) => fan.forced) ? "Mixed" : "Auto");
