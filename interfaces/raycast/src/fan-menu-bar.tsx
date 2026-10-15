@@ -100,7 +100,33 @@ export default function Command() {
           />
         </MenuBarExtra.Section>
       ) : null}
+      {data?.cooling ? (
+        <MenuBarExtra.Section title="Cooldown">
+          <MenuBarExtra.Item
+            title={`Holding ${Math.round(data.cooling.percent)}%`}
+            subtitle={`until below ${Math.round(data.cooling.below)} °C`}
+            icon={Icon.Snowflake}
+          />
+        </MenuBarExtra.Section>
+      ) : null}
       <MenuBarExtra.Section>
+        <MenuBarExtra.Item
+          title="Cool Until Below…"
+          icon={Icon.Snowflake}
+          onAction={() =>
+            launchCommand({
+              name: "cool-until",
+              type: LaunchType.UserInitiated,
+            })
+          }
+        />
+        {data?.cooling ? (
+          <MenuBarExtra.Item
+            title="Cancel Cooldown"
+            icon={Icon.XMarkCircle}
+            onAction={() => apply(setAutomatic, "Fans on automatic")}
+          />
+        ) : null}
         <MenuBarExtra.Item
           title="Force Maximum"
           icon={Icon.Bolt}
