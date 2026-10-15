@@ -26,11 +26,13 @@ const status = await readStatus(true); // true = also read CPU/GPU temperatures
 
 await setPercent(70);  // force every fan to 70% of its own range (needs the scoped sudo rule)
 await setAutomatic();  // hand every fan back to SMC firmware control
+await coolUntil(100, 50); // force maximum and start a background release below 50 °C (returns at once)
+await setAutomatic();     // cancels the background cooler and returns every fan to firmware control
 ```
 
 Reads (`readStatus`) need no privileges. Writes (`setPercent`, `setMaximum`, `setAutomatic`,
-`runGuard`) run the core under `sudo -n` and require the one scoped NOPASSWD rule that
-`scripts/install.sh` installs.
+`runGuard`, `coolUntil`) run the core under `sudo -n` and require the one scoped NOPASSWD rule
+that `scripts/install.sh` installs.
 
 The binary path is `/usr/local/bin/fan_control` by default; override it with the
 `FAN_CONTROL_BINARY` environment variable.
@@ -44,6 +46,7 @@ The binary path is `/usr/local/bin/fan_control` by default; override it with the
 | `setMaximum()` | Force every fan to its maximum. |
 | `setAutomatic()` | Return every fan to firmware control. |
 | `runGuard(ceilingCelsius?)` | Revert to automatic if a sensor group exceeds the ceiling. |
+| `coolUntil(percent?, belowCelsius?, ceilingCelsius?)` | Force a speed and start a background watcher that releases to firmware below the threshold (defaults 100% / 50 °C). |
 | `rpm(value)` | Format RPM for display. |
 | `mode(fans)` | `"Auto"`, `"Forced"` or `"Mixed"`. |
 | `average(fans)` | Mean load percentage across fans. |

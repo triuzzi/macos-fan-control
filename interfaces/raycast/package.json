@@ -26,6 +26,12 @@
       "mode": "view"
     },
     {
+      "name": "cool-until",
+      "title": "Cool Until Below",
+      "description": "Hold a speed until the hottest sensor drops below a temperature, then release.",
+      "mode": "view"
+    },
+    {
       "name": "maximum",
       "title": "Set Fans to Maximum",
       "description": "Force every fan to its hardware maximum.",
@@ -46,7 +52,7 @@
     }
   ],
   "dependencies": {
-    "macos-fan-control-client": "^1.0.0",
+    "macos-fan-control-client": "^1.1.0",
     "@raycast/api": "^2.6.3",
     "@raycast/utils": "^2.3.2"
   },
