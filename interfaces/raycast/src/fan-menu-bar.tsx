@@ -3,12 +3,10 @@ import {
   Icon,
   LaunchType,
   MenuBarExtra,
-  Toast,
   launchCommand,
   showHUD,
-  showToast,
 } from "@raycast/api";
-import { useCachedPromise } from "@raycast/utils";
+import { showFailureToast, useCachedPromise } from "@raycast/utils";
 import {
   average,
   mode,
@@ -42,12 +40,8 @@ export default function Command() {
       await action();
       await showHUD(confirmation);
       revalidate();
-    } catch (failure) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Failed",
-        message: (failure as Error).message,
-      });
+    } catch (error) {
+      showFailureToast(error, { title: "Failed" });
     }
   }
 
