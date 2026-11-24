@@ -151,13 +151,24 @@ as the watcher is running; if the sensor is already at or above `--on` when it i
 fans are forced immediately and the watcher starts in the `holding` state.
 
 `--sensor` picks which average the thresholds are compared against: `max` (default) is the
-hottest of the CPU and GPU groups, `cpu` and `gpu` are that group alone.
+hottest of the CPU and GPU groups, `cpu` and `gpu` are that group alone. A group with no
+readable sensors is refused rather than read as 0 °C, and if it becomes unreadable while the
+watcher runs, the fans go back to the firmware and the watcher stops.
+
+Arming in the `armed` state hands the fans back to the firmware: a trigger only forces when it
+fires, so whatever a previous watcher (or a manual `set`) left forced is released. Arming in the
+`holding` state forces immediately, as above.
 
 `--on` must be above `--below` (the hysteresis band) and under `--max-temp` (default 95 °C).
 If the watched group rises above the ceiling while holding — possible when the requested
-speed is below what the firmware would have chosen — or the sensors become unreadable, the
-watcher hands the fans back to the firmware and stops instead of flapping. Exit `0` means the
-watcher started; `1` means it could not; `2` is a bad argument.
+speed is below what the firmware would have chosen — the watcher hands the fans back to the
+firmware and stops instead of flapping. A release that the SMC rejects is retried on the next
+tick, so the state never claims the fans were handed back when they were not.
+
+Exit `0` means the watcher started **and its state was recorded**; `1` means the fans could not
+be forced, the watched group has no sensors, or the watcher could not start — in every one of
+those the fans are handed back to the firmware before exiting; `2` is a bad argument. Numbers
+are parsed strictly: `trigger abc` and `--on 80abc` are exit `2`, never a coerced value.
 
 The watcher is superseded exactly like `cool`: `set`, `max`, `auto`, `cool` or another
 `trigger` stops it, and so does a `guard` trip.
