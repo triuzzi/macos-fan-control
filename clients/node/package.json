@@ -1,6 +1,6 @@
 {
   "name": "macos-fan-control-client",
-  "version": "1.2.0",
+  "version": "1.2.2",
   "description": "Typed Node client for the fan_control CLI \u2014 read and force Apple Silicon fan speed through the SMC.",
   "license": "MIT",
   "author": "triuzzi",

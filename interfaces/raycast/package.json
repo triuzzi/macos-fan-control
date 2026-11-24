@@ -65,7 +65,7 @@
     }
   ],
   "dependencies": {
-    "macos-fan-control-client": "^1.2.0",
+    "macos-fan-control-client": "^1.2.2",
     "@raycast/api": "^2.6.3",
     "@raycast/utils": "^2.3.2"
   },
