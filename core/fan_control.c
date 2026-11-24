@@ -53,20 +53,23 @@ _Static_assert(__builtin_offsetof(Message, result) == 40, "result offset");
 _Static_assert(__builtin_offsetof(Message, index) == 44, "index offset");
 _Static_assert(__builtin_offsetof(Message, bytes) == 48, "bytes offset");
 
+typedef enum { WATCH_COOL, WATCH_TRIGGER } WatchKind;
+
 typedef struct {
+  WatchKind kind;
   int pid;
-  double on, percent, below, ceiling;
+  double percent, below, ceiling;
+  double on;
   int sensor;
   int holding;
-} Trigger;
+} Watch;
 
 static io_connect_t connection;
-static int readCoolState(int *pid, double *percent, double *below, double *ceiling);
-static int readTriggerState(Trigger *trigger);
-static void stopCool(void);
-static void stopTrigger(void);
+static int readWatch(WatchKind kind, Watch *watch);
 static void stopWatchers(void);
 static const char *sensorName(int sensor);
+static int groupPresent(int sensor, int cpuCount, int gpuCount);
+static double reading(int sensor, double cpu, double gpu);
 
 static int openSMC(void) {
   io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"));
@@ -199,17 +202,17 @@ static int status(int count, int json, int withTemperatures) {
   if (withTemperatures && temperatures(&cpu, &cpuCount, &gpu, &gpuCount))
     { fprintf(stderr, "fan_control: cannot read sensors\n"); return 1; }
 
-  int coolPid = 0; double coolPercent = 0, coolBelow = 0, coolCeiling = 0;
-  int cooling = readCoolState(&coolPid, &coolPercent, &coolBelow, &coolCeiling);
-  Trigger trigger;
-  int triggering = readTriggerState(&trigger);
+  Watch cooling, trigger;
+  int coolingActive = readWatch(WATCH_COOL, &cooling);
+  int triggering = readWatch(WATCH_TRIGGER, &trigger);
 
   if (!json) {
     for (int i = 0; i < count; i++)
       printf("fan %d  %.0f rpm  %.0f%%  target %.0f  %s\n", i, fans[i].actual,
              percent(&fans[i], fans[i].actual), fans[i].target, fans[i].forced ? "forced" : "auto");
     if (withTemperatures) printf("cpu %.1fC  gpu %.1fC\n", cpu, gpu);
-    if (cooling) printf("cooling %.0f%% until below %.0fC (pid %d)\n", coolPercent, coolBelow, coolPid);
+    if (coolingActive)
+      printf("cooling %.0f%% until below %.0fC (pid %d)\n", cooling.percent, cooling.below, cooling.pid);
     if (triggering)
       printf("trigger %s at %.0fC: hold %.0f%% until below %.0fC (%s, pid %d)\n",
              trigger.holding ? "holding" : "armed", trigger.on, trigger.percent,
@@ -223,8 +226,9 @@ static int status(int count, int json, int withTemperatures) {
            i ? "," : "", i, fans[i].actual, fans[i].minimum, fans[i].maximum, fans[i].target,
            percent(&fans[i], fans[i].actual), fans[i].forced ? "true" : "false");
   printf("]");
-  if (cooling)
-    printf(",\"cooling\":{\"percent\":%.0f,\"below\":%.0f,\"pid\":%d}", coolPercent, coolBelow, coolPid);
+  if (coolingActive)
+    printf(",\"cooling\":{\"percent\":%.0f,\"below\":%.0f,\"pid\":%d}",
+           cooling.percent, cooling.below, cooling.pid);
   if (triggering)
     printf(",\"trigger\":{\"percent\":%.0f,\"on\":%.0f,\"below\":%.0f,\"sensor\":\"%s\",\"state\":\"%s\",\"pid\":%d}",
            trigger.percent, trigger.on, trigger.below, sensorName(trigger.sensor),
@@ -304,77 +308,178 @@ static int guard(int count, double ceiling) {
   return automatic(count);
 }
 
-static int readCoolState(int *pid, double *percent, double *below, double *ceiling) {
-  FILE *file = fopen(COOL_STATE, "r");
+static const char *watchPath(WatchKind kind) {
+  return kind == WATCH_COOL ? COOL_STATE : TRIGGER_STATE;
+}
+
+static int readWatch(WatchKind kind, Watch *watch) {
+  FILE *file = fopen(watchPath(kind), "r");
   if (!file) return 0;
-  int parsed = fscanf(file, "%d %lf %lf %lf", pid, percent, below, ceiling) == 4;
+  watch->kind = kind;
+  int parsed;
+  if (kind == WATCH_COOL)
+    parsed = fscanf(file, "%d %lf %lf %lf", &watch->pid, &watch->percent, &watch->below, &watch->ceiling) == 4;
+  else
+    parsed = fscanf(file, "%d %lf %lf %lf %lf %d %d", &watch->pid, &watch->on, &watch->percent,
+                    &watch->below, &watch->ceiling, &watch->sensor, &watch->holding) == 7;
   fclose(file);
   if (!parsed) return 0;
-  if (kill(*pid, 0) == 0 || errno == EPERM) return 1;
+  if (kill(watch->pid, 0) == 0 || errno == EPERM) return 1;
   return 0;
 }
 
-static void writeCoolState(double percent, double below, double ceiling) {
-  FILE *file = fopen(COOL_STATE, "w");
-  if (!file) return;
-  fprintf(file, "%d %.2f %.2f %.2f\n", (int)getpid(), percent, below, ceiling);
-  fclose(file);
+// Returns 0 when the state is durably recorded. A watcher whose state cannot be
+// read back has no ownership token, so the caller must not leave the fans forced.
+static int writeWatch(const Watch *watch) {
+  FILE *file = fopen(watchPath(watch->kind), "w");
+  if (!file) return 1;
+  int written;
+  if (watch->kind == WATCH_COOL)
+    written = fprintf(file, "%d %.2f %.2f %.2f\n", watch->pid, watch->percent, watch->below, watch->ceiling);
+  else
+    written = fprintf(file, "%d %.2f %.2f %.2f %.2f %d %d\n", watch->pid, watch->on, watch->percent,
+                      watch->below, watch->ceiling, watch->sensor, watch->holding);
+  int failed = written < 0;
+  if (fclose(file)) failed = 1;
+  return failed;
 }
 
-static void removeOwnCoolState(void) {
-  int pid; double percent, below, ceiling;
-  if (readCoolState(&pid, &percent, &below, &ceiling) == 1 && pid == (int)getpid()) unlink(COOL_STATE);
+static void removeOwnWatch(WatchKind kind) {
+  Watch watch;
+  if (readWatch(kind, &watch) == 1 && watch.pid == (int)getpid()) unlink(watchPath(kind));
 }
 
-static void stopCool(void) {
-  int pid; double percent, below, ceiling;
-  if (readCoolState(&pid, &percent, &below, &ceiling) == 1) {
-    kill(pid, SIGTERM);
-    for (int attempt = 0; attempt < 40 && kill(pid, 0) == 0; attempt++) usleep(25000);
-    if (kill(pid, 0) == 0) kill(pid, SIGKILL);
+static void stopWatch(WatchKind kind) {
+  Watch watch;
+  if (readWatch(kind, &watch) == 1) {
+    kill(watch.pid, SIGTERM);
+    for (int attempt = 0; attempt < 40 && kill(watch.pid, 0) == 0; attempt++) usleep(25000);
+    if (kill(watch.pid, 0) == 0) kill(watch.pid, SIGKILL);
   }
-  unlink(COOL_STATE);
+  unlink(watchPath(kind));
 }
 
-static int startCool(int count, double percent, double below, double ceiling) {
-  pid_t pid = fork();
-  if (pid < 0) { fprintf(stderr, "fan_control: cannot start cooler\n"); return 1; }
-  if (pid > 0) return 0;
+static void stopWatchers(void) {
+  stopWatch(WATCH_COOL);
+  stopWatch(WATCH_TRIGGER);
+}
 
-  setsid();
-  if (fork() > 0) _exit(0);
-
-  int devnull = open("/dev/null", O_RDWR);
-  if (devnull >= 0) { dup2(devnull, 0); dup2(devnull, 1); dup2(devnull, 2); if (devnull > 2) close(devnull); }
-
-  // The parent closes its SMC user client on exit, which tears down the shared
-  // connection; the detached watcher opens its own.
-  IOServiceClose(connection);
-  if (openSMC()) _exit(1);
-
-  writeCoolState(percent, below, ceiling);
-
+// One loop for both watchers: a cooldown holds until the dies are below the
+// threshold, a trigger arms and holds on the hysteresis band. Only the process
+// that forced the fans owns them, so every exit path hands them back first.
+static void watchLoop(int count, Watch *watch) {
   for (;;) {
     usleep(COOL_POLL_MICROSECONDS);
 
-    int owner; double ownerPercent, ownerBelow, ownerCeiling;
-    if (readCoolState(&owner, &ownerPercent, &ownerBelow, &ownerCeiling) != 1 || owner != (int)getpid()) _exit(0);
+    Watch owner;
+    if (readWatch(watch->kind, &owner) != 1 || owner.pid != (int)getpid()) {
+      if (watch->kind == WATCH_COOL || watch->holding) automatic(count);
+      _exit(0);
+    }
 
     double cpu, gpu;
     int cpuCount, gpuCount;
-    if (temperatures(&cpu, &cpuCount, &gpu, &gpuCount)) { automatic(count); removeOwnCoolState(); _exit(0); }
+    if (temperatures(&cpu, &cpuCount, &gpu, &gpuCount) ||
+        !groupPresent(watch->sensor, cpuCount, gpuCount)) {
+      automatic(count);
+      removeOwnWatch(watch->kind);
+      _exit(0);
+    }
 
-    double hottest = cpu > gpu ? cpu : gpu;
-    if (hottest < below || hottest > ceiling) { automatic(count); removeOwnCoolState(); _exit(0); }
+    double hottest = reading(watch->sensor, cpu, gpu);
+
+    if (watch->kind == WATCH_COOL) {
+      if (hottest < watch->below || hottest > watch->ceiling) {
+        automatic(count);
+        removeOwnWatch(watch->kind);
+        _exit(0);
+      }
+      continue;
+    }
+
+    if (!watch->holding && hottest >= watch->on) {
+      if (force(count, watch->percent)) { automatic(count); removeOwnWatch(watch->kind); _exit(1); }
+      watch->holding = 1;
+      if (writeWatch(watch)) { automatic(count); _exit(1); }
+    } else if (watch->holding && hottest > watch->ceiling) {
+      automatic(count);
+      removeOwnWatch(watch->kind);
+      _exit(0);
+    } else if (watch->holding && hottest <= watch->below) {
+      // Stay owned if the release did not take, so the next tick retries it.
+      if (automatic(count) == 0) {
+        watch->holding = 0;
+        writeWatch(watch);
+      }
+    }
   }
+}
+
+// Detaches the watcher and returns only once its state is recorded, so a caller
+// never reports success for a watcher that cannot exist.
+static int startWatch(int count, Watch *watch) {
+  int channel[2];
+  if (pipe(channel)) { fprintf(stderr, "fan_control: cannot start the watcher\n"); return 1; }
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(channel[0]); close(channel[1]);
+    fprintf(stderr, "fan_control: cannot start the watcher\n");
+    return 1;
+  }
+  if (pid == 0) {
+    close(channel[0]);
+    setsid();
+    if (fork() > 0) _exit(0);
+
+    int devnull = open("/dev/null", O_RDWR);
+    if (devnull >= 0) { dup2(devnull, 0); dup2(devnull, 1); dup2(devnull, 2); if (devnull > 2) close(devnull); }
+
+    // The parent closes its SMC user client on exit, which tears down the shared
+    // connection; the detached watcher opens its own.
+    IOServiceClose(connection);
+    if (openSMC()) _exit(1);
+
+    int own = (int)getpid();
+    watch->pid = own;
+    ssize_t reported = write(channel[1], &own, sizeof own);
+    close(channel[1]);
+    if (reported != (ssize_t)sizeof own) _exit(1);
+
+    watchLoop(count, watch);
+    _exit(0);
+  }
+
+  close(channel[1]);
+  int child = 0;
+  ssize_t reported = read(channel[0], &child, sizeof child);
+  close(channel[0]);
+  if (reported != (ssize_t)sizeof child || child <= 0) {
+    fprintf(stderr, "fan_control: the watcher did not start\n");
+    return 1;
+  }
+
+  watch->pid = child;
+  if (writeWatch(watch)) {
+    kill(child, SIGKILL);
+    fprintf(stderr, "fan_control: cannot record the watcher state\n");
+    return 1;
+  }
+  return 0;
 }
 
 static int cool(int count, double percent, double below, double ceiling) {
   stopWatchers();
 
   int code = force(count, percent);
-  if (code) return code;
-  if (startCool(count, percent, below, ceiling)) return 1;
+  if (code) { automatic(count); return code; }
+
+  Watch watch = {0};
+  watch.kind = WATCH_COOL;
+  watch.percent = percent;
+  watch.below = below;
+  watch.ceiling = ceiling;
+  if (startWatch(count, &watch)) { automatic(count); return 1; }
 
   printf("cooling at %.0f%% until below %.0fC (background)\n", percent, below);
   return 0;
@@ -391,112 +496,45 @@ static int parseSensor(const char *name) {
   return -1;
 }
 
+// An empty group averages to 0 °C, which would read as "cold" forever: the
+// trigger has to refuse a group that has no sensors at all.
+static int groupPresent(int sensor, int cpuCount, int gpuCount) {
+  if (sensor == SENSOR_CPU) return cpuCount > 0;
+  if (sensor == SENSOR_GPU) return gpuCount > 0;
+  return cpuCount > 0 || gpuCount > 0;
+}
+
 static double reading(int sensor, double cpu, double gpu) {
   if (sensor == SENSOR_CPU) return cpu;
   if (sensor == SENSOR_GPU) return gpu;
   return cpu > gpu ? cpu : gpu;
 }
 
-static int readTriggerState(Trigger *trigger) {
-  FILE *file = fopen(TRIGGER_STATE, "r");
-  if (!file) return 0;
-  int parsed = fscanf(file, "%d %lf %lf %lf %lf %d %d", &trigger->pid, &trigger->on,
-                      &trigger->percent, &trigger->below, &trigger->ceiling,
-                      &trigger->sensor, &trigger->holding) == 7;
-  fclose(file);
-  if (!parsed) return 0;
-  if (kill(trigger->pid, 0) == 0 || errno == EPERM) return 1;
-  return 0;
-}
-
-static void writeTriggerState(const Trigger *trigger) {
-  FILE *file = fopen(TRIGGER_STATE, "w");
-  if (!file) return;
-  fprintf(file, "%d %.2f %.2f %.2f %.2f %d %d\n", (int)getpid(), trigger->on,
-          trigger->percent, trigger->below, trigger->ceiling, trigger->sensor, trigger->holding);
-  fclose(file);
-}
-
-static void removeOwnTriggerState(void) {
-  Trigger trigger;
-  if (readTriggerState(&trigger) == 1 && trigger.pid == (int)getpid()) unlink(TRIGGER_STATE);
-}
-
-static void stopTrigger(void) {
-  Trigger trigger;
-  if (readTriggerState(&trigger) == 1) {
-    kill(trigger.pid, SIGTERM);
-    for (int attempt = 0; attempt < 40 && kill(trigger.pid, 0) == 0; attempt++) usleep(25000);
-    if (kill(trigger.pid, 0) == 0) kill(trigger.pid, SIGKILL);
-  }
-  unlink(TRIGGER_STATE);
-}
-
-static void stopWatchers(void) {
-  stopCool();
-  stopTrigger();
-}
-
-static int startTrigger(int count, const Trigger *request) {
-  pid_t pid = fork();
-  if (pid < 0) { fprintf(stderr, "fan_control: cannot start trigger\n"); return 1; }
-  if (pid > 0) return 0;
-
-  setsid();
-  if (fork() > 0) _exit(0);
-
-  int devnull = open("/dev/null", O_RDWR);
-  if (devnull >= 0) { dup2(devnull, 0); dup2(devnull, 1); dup2(devnull, 2); if (devnull > 2) close(devnull); }
-
-  // The parent closes its SMC user client on exit, which tears down the shared
-  // connection; the detached watcher opens its own.
-  IOServiceClose(connection);
-  if (openSMC()) _exit(1);
-
-  Trigger current = *request;
-  writeTriggerState(&current);
-
-  for (;;) {
-    usleep(COOL_POLL_MICROSECONDS);
-
-    Trigger owner;
-    if (readTriggerState(&owner) != 1 || owner.pid != (int)getpid()) _exit(0);
-
-    double cpu, gpu;
-    int cpuCount, gpuCount;
-    if (temperatures(&cpu, &cpuCount, &gpu, &gpuCount)) { automatic(count); removeOwnTriggerState(); _exit(0); }
-
-    double hottest = reading(current.sensor, cpu, gpu);
-    if (!current.holding && hottest >= current.on) {
-      if (force(count, current.percent)) { removeOwnTriggerState(); _exit(0); }
-      current.holding = 1;
-      writeTriggerState(&current);
-    } else if (current.holding && hottest <= current.below) {
-      automatic(count);
-      current.holding = 0;
-      writeTriggerState(&current);
-    } else if (current.holding && hottest > current.ceiling) {
-      automatic(count);
-      removeOwnTriggerState();
-      _exit(0);
-    }
-  }
-}
-
-static int armTrigger(int count, Trigger *request) {
-  stopWatchers();
-
+static int armTrigger(int count, Watch *request) {
+  // Validate the request before tearing down a watcher that is already running:
+  // an unarmable trigger must not destroy the previous instruction.
   double cpu, gpu;
   int cpuCount, gpuCount;
   if (temperatures(&cpu, &cpuCount, &gpu, &gpuCount)) { fprintf(stderr, "fan_control: cannot read sensors\n"); return 1; }
+  if (!groupPresent(request->sensor, cpuCount, gpuCount)) {
+    fprintf(stderr, "fan_control: no %s sensors to watch\n", sensorName(request->sensor));
+    return 1;
+  }
+
+  stopWatchers();
 
   request->holding = reading(request->sensor, cpu, gpu) >= request->on;
   if (request->holding) {
     int code = force(count, request->percent);
-    if (code) return code;
+    if (code) { automatic(count); return code; }
+  } else if (automatic(count)) {
+    // A trigger only forces when it fires, so anything the previous watcher left
+    // forced has to go back to the firmware now.
+    fprintf(stderr, "fan_control: cannot hand the fans back to the firmware\n");
+    return 1;
   }
 
-  if (startTrigger(count, request)) return 1;
+  if (startWatch(count, request)) { automatic(count); return 1; }
 
   printf("trigger %s at %.0fC: hold %.0f%% until below %.0fC (%s, background)\n",
          request->holding ? "holding" : "armed", request->on, request->percent,
@@ -525,20 +563,59 @@ static int keys(const char *prefix) {
   return 0;
 }
 
+// strtod with no trailing garbage: a malformed number driving an SMC write has
+// to be an error, not a coerced zero.
+static int parseNumber(const char *text, double *out) {
+  char *end = NULL;
+  errno = 0;
+  double value = strtod(text, &end);
+  if (end == text || *end || errno) return 1;
+  *out = value;
+  return 0;
+}
+
 int main(int argc, char **argv) {
   const char *command = argc > 1 ? argv[1] : "status";
-  int json = 0, withTemperatures = 0, belowGiven = 0, sensor = SENSOR_HOTTEST;
+  int json = 0, withTemperatures = 0, belowGiven = 0, onGiven = 0, sensorGiven = 0, sensor = SENSOR_HOTTEST;
   double ceiling = DEFAULT_CEILING, below = DEFAULT_BELOW, onTemperature = DEFAULT_TRIGGER_ON;
   for (int i = 2; i < argc; i++) {
     if (!strcmp(argv[i], "--json")) json = 1;
     if (!strcmp(argv[i], "--temps")) withTemperatures = 1;
-    if (!strcmp(argv[i], "--max-temp") && i + 1 < argc) ceiling = atof(argv[++i]);
-    if (!strcmp(argv[i], "--below") && i + 1 < argc) { below = atof(argv[++i]); belowGiven = 1; }
-    if (!strcmp(argv[i], "--on") && i + 1 < argc) onTemperature = atof(argv[++i]);
-    if (!strcmp(argv[i], "--sensor") && i + 1 < argc) sensor = parseSensor(argv[++i]);
+    if (!strcmp(argv[i], "--max-temp")) {
+      if (i + 1 >= argc || parseNumber(argv[++i], &ceiling))
+        { fprintf(stderr, "fan_control: --max-temp needs a number\n"); return 2; }
+    }
+    if (!strcmp(argv[i], "--below")) {
+      if (i + 1 >= argc || parseNumber(argv[++i], &below))
+        { fprintf(stderr, "fan_control: --below needs a number\n"); return 2; }
+      belowGiven = 1;
+    }
+    if (!strcmp(argv[i], "--on")) {
+      if (i + 1 >= argc || parseNumber(argv[++i], &onTemperature))
+        { fprintf(stderr, "fan_control: --on needs a number\n"); return 2; }
+      onGiven = 1;
+    }
+    if (!strcmp(argv[i], "--sensor")) {
+      if (i + 1 >= argc || (sensor = parseSensor(argv[++i])) < 0)
+        { fprintf(stderr, "fan_control: --sensor must be max, cpu or gpu\n"); return 2; }
+      sensorGiven = 1;
+    }
   }
-  int triggerPercent = argc > 2 && argv[2][0] != '-' ? atoi(argv[2]) : 100;
+
+  // Only the commands that take a speed read one positionally.
+  int takesPercent = !strcmp(command, "set") || !strcmp(command, "cool") || !strcmp(command, "trigger");
+  double positional = 100;
+  int positionalGiven = 0;
+  if (takesPercent && argc > 2 && argv[2][0] != '-') {
+    if (parseNumber(argv[2], &positional) || positional < 0 || positional > 100)
+      { fprintf(stderr, "fan_control: percent must be 0-100\n"); return 2; }
+    positionalGiven = 1;
+  }
   if (!strcmp(command, "trigger") && !belowGiven) below = DEFAULT_TRIGGER_BELOW;
+  if (onGiven && strcmp(command, "trigger"))
+    { fprintf(stderr, "fan_control: --on only applies to trigger\n"); return 2; }
+  if (sensorGiven && strcmp(command, "trigger"))
+    { fprintf(stderr, "fan_control: --sensor only applies to trigger\n"); return 2; }
 
   if (openSMC()) return 1;
 
@@ -551,34 +628,31 @@ int main(int argc, char **argv) {
 
   int writes = !strcmp(command, "max") || !strcmp(command, "auto") || !strcmp(command, "guard") ||
                !strcmp(command, "cool") || !strcmp(command, "trigger") ||
-               (!strcmp(command, "set") && argc > 2);
+               (!strcmp(command, "set") && positionalGiven);
 
-  if (!strcmp(command, "set") && argc > 2 && (atof(argv[2]) < 0 || atof(argv[2]) > 100))
-    { fprintf(stderr, "fan_control: percent must be 0-100\n"); IOServiceClose(connection); return 2; }
   if (!strcmp(command, "cool")) {
     if (below <= 0 || below >= 130) { fprintf(stderr, "fan_control: --below must be 0-130\n"); IOServiceClose(connection); return 2; }
     if (below >= ceiling) { fprintf(stderr, "fan_control: --below must be under the %.0fC ceiling\n", ceiling); IOServiceClose(connection); return 2; }
   }
   if (!strcmp(command, "trigger")) {
-    if (triggerPercent < 0 || triggerPercent > 100) { fprintf(stderr, "fan_control: percent must be 0-100\n"); IOServiceClose(connection); return 2; }
     if (below <= 0 || below >= 130) { fprintf(stderr, "fan_control: --below must be 0-130\n"); IOServiceClose(connection); return 2; }
     if (onTemperature <= 0 || onTemperature >= 130) { fprintf(stderr, "fan_control: --on must be 0-130\n"); IOServiceClose(connection); return 2; }
     if (onTemperature <= below) { fprintf(stderr, "fan_control: --on must be above --below\n"); IOServiceClose(connection); return 2; }
     if (onTemperature >= ceiling) { fprintf(stderr, "fan_control: --on must be under the %.0fC ceiling\n", ceiling); IOServiceClose(connection); return 2; }
-    if (sensor < 0) { fprintf(stderr, "fan_control: --sensor must be max, cpu or gpu\n"); IOServiceClose(connection); return 2; }
   }
   if (writes && geteuid() != 0) { fprintf(stderr, "fan_control: %s needs root\n", command); IOServiceClose(connection); return 1; }
 
   if (!strcmp(command, "status")) code = status(fans, json, withTemperatures);
   else if (!strcmp(command, "max")) { stopWatchers(); code = force(fans, 100); }
   else if (!strcmp(command, "auto")) { stopWatchers(); code = automatic(fans); }
-  else if (!strcmp(command, "set") && argc > 2) { stopWatchers(); code = force(fans, atof(argv[2])); }
+  else if (!strcmp(command, "set") && positionalGiven) { stopWatchers(); code = force(fans, positional); }
   else if (!strcmp(command, "guard")) code = guard(fans, ceiling);
-  else if (!strcmp(command, "cool")) code = cool(fans, argc > 2 && argv[2][0] != '-' ? atof(argv[2]) : 100, below, ceiling);
+  else if (!strcmp(command, "cool")) code = cool(fans, positional, below, ceiling);
   else if (!strcmp(command, "trigger")) {
-    Trigger request = {0};
+    Watch request = {0};
+    request.kind = WATCH_TRIGGER;
     request.on = onTemperature;
-    request.percent = triggerPercent;
+    request.percent = positional;
     request.below = below;
     request.ceiling = ceiling;
     request.sensor = sensor;
