@@ -11,7 +11,7 @@ import {
   Keyboard,
 } from "@raycast/api";
 import { useEffect } from "react";
-import { useCachedPromise } from "@raycast/utils";
+import { showFailureToast, useCachedPromise } from "@raycast/utils";
 import {
   FanStatus,
   average,
@@ -75,9 +75,8 @@ export default function Command() {
       toast.title = title;
       revalidate();
     } catch (error) {
-      toast.style = Toast.Style.Failure;
-      toast.title = "Failed";
-      toast.message = (error as Error).message;
+      await toast.hide();
+      showFailureToast(error, { title: "Failed" });
     }
   }
 
