@@ -6,6 +6,7 @@ import {
   launchCommand,
   showHUD,
 } from "@raycast/api";
+import { useEffect } from "react";
 import { showFailureToast, useCachedPromise } from "@raycast/utils";
 import {
   average,
@@ -15,6 +16,10 @@ import {
   setAutomatic,
   setPercent,
 } from "macos-fan-control-client";
+
+// The menu is often left open while watching a workload, and the `interval` in
+// package.json only restarts the command, which does not re-render an open menu.
+const REFRESH_INTERVAL_MS = 5000;
 
 export default function Command() {
   // Failures are reported inside the menu; without this the default failure toast
@@ -34,6 +39,11 @@ export default function Command() {
     0,
   );
   const current = fans.length ? mode(fans) : "";
+
+  useEffect(() => {
+    const timer = setInterval(revalidate, REFRESH_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [revalidate]);
 
   async function apply(action: () => Promise<string>, confirmation: string) {
     try {
