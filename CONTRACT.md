@@ -11,10 +11,12 @@ fan_control max
 fan_control auto
 fan_control guard [--max-temp <celsius>]
 fan_control cool [<0-100>] [--below <celsius>] [--max-temp <celsius>]
+fan_control trigger [<0-100>] [--on <celsius>] [--below <celsius>] [--sensor max|cpu|gpu] [--max-temp <celsius>]
 fan_control keys [prefix]
 ```
 
-Reads run unprivileged. `set`, `max`, `auto`, `guard` and `cool` write SMC keys and require root.
+Reads run unprivileged. `set`, `max`, `auto`, `guard`, `cool` and `trigger` write SMC keys and
+require root.
 
 ## Exit codes
 
@@ -53,6 +55,14 @@ they become readable, so the core settles ~400 ms and re-reads before reporting 
     "percent": 100,
     "below": 50,
     "pid": 4212
+  },
+  "trigger": {
+    "percent": 85,
+    "on": 80,
+    "below": 60,
+    "sensor": "max",
+    "state": "armed",
+    "pid": 4213
   }
 }
 ```
@@ -63,6 +73,11 @@ they become readable, so the core settles ~400 ms and re-reads before reporting 
 - `cooling` is present only while a background `cool` watcher is running, and reports the held
   speed, the release threshold and the watcher's pid. It is read from the same state a
   frontend can use to tell whether a cooldown is in progress.
+- `trigger` is present only while a background `trigger` watcher is armed, and reports the
+  trigger temperature, the held speed, the release threshold, the sensor group, the current
+  `state` (`armed` or `holding`) and the watcher's pid. A frontend can read it to show whether
+  the trigger is waiting or already spinning the fans.
+- Only one watcher runs at a time, so `cooling` and `trigger` never appear together.
 - `temperatures` is present only with `--temps`. It costs ~500 ms because it walks the whole
   SMC key index; a plain `status` is ~10 ms. Poll accordingly.
 - `cpu` averages the `Tp*` sensor group, `gpu` averages `Tg*`. Other `T*` groups are not die
@@ -106,9 +121,9 @@ and, when the hottest sensor group drops below `--below` (default 50 °C), hands
 to the firmware and exits. It is a background cooling burst: `cool` itself exits `0` as soon
 as the fans are verified forced and the watcher is running.
 
-The watcher is **superseded by the next instruction**: running `set`, `max`, `auto` or another
-`cool` stops the current watcher before applying the new setting, so the last instruction
-wins. A `guard` trip also stops it. There is never more than one watcher.
+The watcher is **superseded by the next instruction**: running `set`, `max`, `auto`, `cool` or
+another `trigger` stops the current watcher before applying the new setting, so the last
+instruction wins. A `guard` trip also stops it. There is never more than one watcher.
 
 The held speed and the threshold are both parameters, so `cool 100 --below 45` means "pin the
 fans to maximum until the dies are under 45 °C". The requested speed is held for the whole
@@ -120,6 +135,32 @@ unreadable, the watcher hands the fans back to the firmware and stops.
 
 Exit `0` means the fans were forced and the background watcher started; `1` means the fans
 could not be forced or the watcher could not start; `2` is a bad argument.
+
+## `trigger`
+
+```
+trigger armed at 80C: hold 85% until below 60C (max, background)
+```
+
+A thermostat with hysteresis, running as a detached watcher. It arms at `<--on>` (default
+80 °C): when the watched sensor group reaches it, every fan is forced to `<0-100>` (default
+`100`, i.e. maximum) and held there until the group drops to `--below` (default 60 °C), at
+which point the fans go back to firmware control and the watcher goes back to waiting. It
+stays armed, so the cycle repeats for as long as the watcher runs. `trigger` returns as soon
+as the watcher is running; if the sensor is already at or above `--on` when it is invoked, the
+fans are forced immediately and the watcher starts in the `holding` state.
+
+`--sensor` picks which average the thresholds are compared against: `max` (default) is the
+hottest of the CPU and GPU groups, `cpu` and `gpu` are that group alone.
+
+`--on` must be above `--below` (the hysteresis band) and under `--max-temp` (default 95 °C).
+If the watched group rises above the ceiling while holding — possible when the requested
+speed is below what the firmware would have chosen — or the sensors become unreadable, the
+watcher hands the fans back to the firmware and stops instead of flapping. Exit `0` means the
+watcher started; `1` means it could not; `2` is a bad argument.
+
+The watcher is superseded exactly like `cool`: `set`, `max`, `auto`, `cool` or another
+`trigger` stops it, and so does a `guard` trip.
 
 ## Stability
 

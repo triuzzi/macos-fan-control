@@ -103,7 +103,37 @@ export default function Command() {
           />
         </MenuBarExtra.Section>
       ) : null}
+      {data?.trigger ? (
+        <MenuBarExtra.Section title="Thermal Trigger">
+          <MenuBarExtra.Item
+            title={
+              data.trigger.state === "holding"
+                ? `Holding ${Math.round(data.trigger.percent)}%`
+                : `Armed at ${Math.round(data.trigger.on)} °C`
+            }
+            subtitle={`${Math.round(data.trigger.on)} °C → ${Math.round(data.trigger.percent)}% → below ${Math.round(data.trigger.below)} °C`}
+            icon={Icon.Temperature}
+          />
+        </MenuBarExtra.Section>
+      ) : null}
       <MenuBarExtra.Section>
+        <MenuBarExtra.Item
+          title="Thermal Trigger…"
+          icon={Icon.Temperature}
+          onAction={() =>
+            launchCommand({
+              name: "thermal-trigger",
+              type: LaunchType.UserInitiated,
+            })
+          }
+        />
+        {data?.trigger ? (
+          <MenuBarExtra.Item
+            title="Cancel Trigger"
+            icon={Icon.XMarkCircle}
+            onAction={() => apply(setAutomatic, "Trigger cancelled")}
+          />
+        ) : null}
         <MenuBarExtra.Item
           title="Cool Until Below…"
           icon={Icon.Snowflake}

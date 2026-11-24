@@ -60,6 +60,7 @@ cd interfaces/raycast && npm install && npm run dev
 | Fan Status | view | Live RPM, target, mode, CPU/GPU temperature |
 | Set Fan Speed | view | Force every fan to 100/85/70/55/40/25/0% |
 | Cool Until Below | view | Hold a speed until the hottest sensor drops below a temperature, in the background |
+| Thermal Trigger | view | Arm a hysteresis thermostat: spin up at a trigger temperature, release below another |
 | Set Fans to Maximum | no-view | Force maximum — assign a hotkey |
 | Set Fans to Automatic | no-view | Hand back to firmware — assign a hotkey |
 | Fan Menu Bar | menu-bar | Current speed in the menu bar |
@@ -75,6 +76,7 @@ sudo fan_control max
 sudo fan_control auto
 sudo fan_control guard --max-temp 95
 sudo fan_control cool --below 50
+sudo fan_control trigger 85 --on 80 --below 60 --sensor cpu
 fan_control keys Tg
 ```
 
@@ -87,6 +89,11 @@ pass) and returns at once, leaving a background watcher that hands the fans back
 firmware once the hottest sensor drops below the threshold. Any later `set`, `max` or `auto`
 replaces it, so the last instruction wins — e.g. `sudo fan_control cool 100 --below 45`, then
 `sudo fan_control auto` to cancel.
+
+`trigger` is the thermostat: `sudo fan_control trigger 85 --on 80 --below 60` spins the fans
+to 85% when the dies reach 80 °C, holds them there until they drop below 60 °C, then hands
+back to the firmware and waits for the next climb. `--sensor cpu|gpu|max` (default `max`)
+picks which average the thresholds track, and `--max-temp` keeps the usual safety ceiling.
 
 ## Node client
 

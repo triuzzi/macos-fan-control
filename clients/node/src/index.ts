@@ -30,10 +30,22 @@ export interface Cooling {
   pid: number;
 }
 
+export type TriggerSensor = "max" | "cpu" | "gpu";
+
+export interface ThermalTrigger {
+  percent: number;
+  on: number;
+  below: number;
+  sensor: TriggerSensor;
+  state: "armed" | "holding";
+  pid: number;
+}
+
 export interface FanStatus {
   fanCount: number;
   fans: Fan[];
   cooling?: Cooling;
+  trigger?: ThermalTrigger;
   temperatures?: Temperatures;
 }
 
@@ -68,6 +80,30 @@ export const runGuard = (ceilingCelsius?: number) =>
   exec(ceilingCelsius === undefined ? ["guard"] : ["guard", "--max-temp", String(ceilingCelsius)], true);
 export const coolUntil = (percent = 100, belowCelsius = 50, ceilingCelsius?: number) => {
   const args = ["cool", String(Math.round(percent)), "--below", String(belowCelsius)];
+  if (ceilingCelsius !== undefined) args.push("--max-temp", String(ceilingCelsius));
+  return exec(args, true);
+};
+
+export interface ThermalTriggerOptions {
+  /** Speed to hold while the trigger is holding, 0-100. */
+  percent?: number;
+  /** Temperature at which the fans are forced. Must be above `below`. */
+  on: number;
+  /** Temperature below which the fans go back to firmware. */
+  below: number;
+  /** Sensor group the thresholds track. Defaults to the hottest of CPU and GPU. */
+  sensor?: TriggerSensor;
+  ceilingCelsius?: number;
+}
+
+export const thermalTrigger = ({
+  percent = 100,
+  on,
+  below,
+  sensor = "max",
+  ceilingCelsius,
+}: ThermalTriggerOptions) => {
+  const args = ["trigger", String(Math.round(percent)), "--on", String(on), "--below", String(below), "--sensor", sensor];
   if (ceilingCelsius !== undefined) args.push("--max-temp", String(ceilingCelsius));
   return exec(args, true);
 };
