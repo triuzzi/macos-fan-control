@@ -19,7 +19,7 @@ import {
 
 // The menu is often left open while watching a workload, and the `interval` in
 // package.json only restarts the command, which does not re-render an open menu.
-const REFRESH_INTERVAL_MS = 5000;
+const REFRESH_INTERVAL_MS = 2000;
 
 export default function Command() {
   // Failures are reported inside the menu; without this the default failure toast
